@@ -1,6 +1,7 @@
 # Domoticz WiZ connected Plugin
 #
 # Author: Syds Post sydspost@gmail.com
+# Color bulbs support & UDP discovery by Faust93 monumentum@gmail.com
 #
 """
 <plugin key="wiz" name="WiZ connected" author="Syds Post" version="1.0.0" wikilink="" externallink="https://www.wizconnected.com/">
@@ -11,7 +12,7 @@
         <ul style="list-style-type:square">
             <li>Auto-detection of devices on network</li>
             <li>On/Off control, state and available status display</li>
-            <li>Dimmer/Warm-cold setting for Lights</li>
+            <li>RGBWW & Dimmer/Warm-cold setting for Lights</li>
 <!--            <li>Scene activation support</li> -->
         </ul>
         <h3>Devices</h3>
@@ -20,12 +21,9 @@
         </ul>
         <h3>Configuration</h3>
         Devices can be renamed in Domoticz or you can rename them in the App and remove them from Domoticz so they are detected with a new name or layout.
-        Be careful when setting the subnet, setting class A or class B networks can lead to performance issues because the plugin uses ARP ping
-        to detect the WiZ connected devices. Hostname Prefix is a comma seperated list of the first 4 characters of the hostname of the WiZ connected devices per brand.
     </description>
     <params>
-        <param field="Mode1" label="Hostname Prefix" width="200px" required="true" default="wiz_"/>
-        <param field="Mode2" label="Subnet" width="200px" required="true" default="192.168.2.0/24"/>
+        <param field="Mode1" label="Broadcast Space" width="200px" required="true" default="192.168.1.255"/>
         <param field="Mode6" label="Debug" width="150px">
             <options>
                 <option label="None" value="0"  default="true" />
@@ -50,15 +48,37 @@ import time
 import math
 import json
 import re
-from scapy.all import srp,Ether,ARP,conf
+import asyncio
+
+#from scapy.all import srp,Ether,ARP,conf
+
+from pywizlight import wizlight, PilotBuilder, discovery
 
 class BasePlugin:
     startup = True;
     devs = {}
     last_update = 0
+    loop = None
 
     def __init__(self):
         return
+
+    async def discovery(self, init = True):
+        bulbs = await discovery.discover_lights(broadcast_space=Parameters["Mode1"])
+        if init != True:
+            return bulbs
+
+        for bulb in bulbs:
+            bulb_type = await bulb.get_bulbtype()
+            deviceFound = False
+            for Device in Devices:
+                if ((bulb.ip == Devices[Device].DeviceID)): deviceFound = True
+
+            if (deviceFound == False):
+                if bulb_type.features.color:
+                    Domoticz.Device(Name=bulb_type.name, DeviceID=bulb.ip,  Unit=len(Devices)+1, Type=241, Subtype=4, Switchtype=7, Image=0).Create()
+                else:
+                    Domoticz.Device(Name=bulb_type.name, DeviceID=bulb.ip,  Unit=len(Devices)+1, Type=241, Subtype=8, Switchtype=7, Image=0).Create()
 
     def onStart(self):
         Domoticz.Log("WiZ connected plugin started")
@@ -66,29 +86,8 @@ class BasePlugin:
             Domoticz.Debugging(int(Parameters["Mode6"]))
             DumpConfigToLog()
 
-        # Find devices that already exist, create those that don't
-        conf.verb=0
-        ans,unans=srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=Parameters["Mode2"]), timeout=2)
-
-        hostNames = []
-
-        for snd,rcv in ans:
-            ipAddress=rcv.sprintf(r"%ARP.psrc%")
-            try:
-                hostName = socket.gethostbyaddr(ipAddress)
-            except:
-                hostName = "Onbekend"
-
-            if hostName[0].startswith(Parameters["Mode1"]):
-                hostNames.append(hostName[0])
-    
-        for hostName in hostNames:
-            Domoticz.Debug("Endpoint '"+hostName+"' found.")
-            deviceFound = False
-            for Device in Devices:
-                if ((hostName == Devices[Device].DeviceID)): deviceFound = True
-            if (deviceFound == False):
-                Domoticz.Device(Name=hostName, DeviceID=hostName,  Unit=len(Devices)+1, Type=241, Subtype=8, Switchtype=7, Image=0).Create()
+        self.loop = asyncio.get_event_loop()
+        self.loop.run_until_complete(self.discovery())
 
         # Create/Start update thread
         self.updateThread = threading.Thread(name="WiZUpdateThread", target=BasePlugin.handleThread, args=(self,))
@@ -134,7 +133,7 @@ class BasePlugin:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
                 sock.sendto(mJSON, (host, port))
- 
+
                 received = sock.recv(1024).decode('utf-8')
             finally:
                 sock.close()
@@ -161,10 +160,17 @@ class BasePlugin:
             # Convert RGB to Cold- and White level
             rgb = json.loads(Color)
             mode = rgb.get("m")
+            r = rgb.get("r")
+            g = rgb.get("g")
+            b = rgb.get("b")
             cw = rgb.get("cw")
             ww = rgb.get("ww")
 
-            mJSON = bytes('{"method":"setPilot","params":{"src":"udp","state":true,"c":' + str(cw) + ',"w":' + str(ww) + '}}', 'utf-8')
+            if Devices[Unit].SubType == 8:
+                mJSON = bytes('{"method":"setPilot","params":{"src":"udp","state":true,"dimming":' + str(Level) + ',"c":' + str(cw) + ',"w":' + str(ww) + '}}', 'utf-8')
+            else:
+                mJSON = bytes('{"method":"setPilot","params":{"src":"udp","state":true,"dimming":' + str(Level) + ',"r":' + str(r) + ',"g":' + str(g) + ',"b":' + str(b) + ',"c":' + str(cw) + ',"w":' + str(ww) + '}}', 'utf-8')
+
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
                 sock.sendto(mJSON, (host, port))
@@ -209,7 +215,7 @@ class BasePlugin:
         # If it hasn't been at least 1 minute (corrected for ~2s runtime) since last update, skip it
         if time.time() - self.last_update < 58:
             return
-        
+
         # Create/Start update thread
         self.updateThread = threading.Thread(name="WiZUpdateThread", target=BasePlugin.handleThread, args=(self,))
         self.updateThread.start()
@@ -224,26 +230,14 @@ class BasePlugin:
             self.last_update = time.time()
 
             # Update devices
-            conf.verb=0
-            ans,unans=srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=Parameters["Mode2"]), timeout=2)
+            bulbs = self.loop.run_until_complete(self.discovery(False))
 
-            hostNames = []
-
-            for snd,rcv in ans:
-                ipAddress=rcv.sprintf(r"%ARP.psrc%")
-                try:
-                    hostName = socket.gethostbyaddr(ipAddress)
-                except:
-                    hostName = "Onbekend"
-
-                if hostName[0][0:3] in Parameters["Mode1"]:
-                    hostNames.append(hostName[0])
-
-            for hostName in hostNames:
-                Domoticz.Debug("Endpoint '"+hostName+"' found.")
+            for bulb in bulbs:
+                bulb_type = asyncio.run(bulb.get_bulbtype())
+                Domoticz.Debug("Endpoint '"+bulb.ip+"' found.")
                 deviceFound = False
                 for Device in Devices:
-                    if ((hostName == Devices[Device].DeviceID)): deviceFound = True
+                    if ((bulb.ip == Devices[Device].DeviceID)): deviceFound = True
 
                     host = str(Devices[Device].DeviceID)
                     port = 38899
@@ -252,11 +246,11 @@ class BasePlugin:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                     try:
                         sock.sendto(mJSON, (host, port))
-        
+
                         received = sock.recv(1024).decode('utf-8')
                     finally:
                         sock.close()
-        
+
                     received=json.loads(received)
                     wizstate=received["result"]["state"]
                     if wizstate:
@@ -270,23 +264,34 @@ class BasePlugin:
                         try:
                             wizcw=received["result"]["c"]
                             wizww=received["result"]["w"]
+                            wizr=received["result"]["r"]
+                            wizg=received["result"]["g"]
+                            wizb=received["result"]["b"]
 
                             c=json.loads(Devices[Device].Color)
                             c["cw"] = wizcw
                             c["ww"] = wizww
+                            c["r"] = wizr
+                            c["g"] = wizg
+                            c["b"] = wizb
+
                         except:
                             wiztemp=received["result"]["temp"] 
                             c["t"] = (wiztemp - 2700) / 14.9
-                        
+
                         wizcolor=json.dumps(c)
                     else:
                        wizcolor=""
-                        
+
                     # Update status of Domoticz device
                     Devices[Device].Update(nValue=wizstate, sValue=wizlevel, TimedOut=False, Color=wizcolor)
 
                 if (deviceFound == False):
-                    Domoticz.Device(Name=hostName, DeviceID=hostName,  Unit=len(Devices)+1, Type=241, Subtype=8, Switchtype=7, Image=0).Create()
+                    if bulb_type.features.color:
+                        Domoticz.Device(Name=bulb_type.name, DeviceID=bulb.ip,  Unit=len(Devices)+1, Type=241, Subtype=4, Switchtype=7, Image=0).Create()
+                    else:
+                        Domoticz.Device(Name=bulb_type.name, DeviceID=bulb.ip,  Unit=len(Devices)+1, Type=241, Subtype=8, Switchtype=7, Image=0).Create()
+
 
         except Exception as err:
             Domoticz.Error("handleThread: "+str(err)+' line '+format(sys.exc_info()[-1].tb_lineno))

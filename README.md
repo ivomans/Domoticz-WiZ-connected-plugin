@@ -2,6 +2,11 @@ WiZ connected Plugin for Domoticz home automation
 
 Controls WiZ connected devices your network (mainly on/off switches and Lights). WiZ devices come in many brands like WiZ connected, Philips and TAO  and may come with different apps, so select the matching App when configuring the plugin.
 
+## Faust93 additions
+
+* RGBWW bulbs support
+* Switch from ARP to UDP discovery (depends on https://github.com/sbidy/pywizlight)
+
 ## Key Features
 
 * Auto-detects devices in your network
@@ -19,7 +24,7 @@ Python version 3.4 or higher required & Domoticz version 2021.1 or greater.
 
 To install:
 * Go in your Domoticz directory using a command line and open the plugins directory.
-* The plugin required Python library scapy ```sudo apt-get install python-scapy```
+* The plugin required Python library pywizlight (https://github.com/sbidy/pywizlight) ```pip3 install pywizlight```
 * Run: ```git clone https://github.com/sydspost/Domoticz-WiZ-connected-plugin.git```
 * Restart Domoticz. ```sudo systemctl restart domoticz```
 
