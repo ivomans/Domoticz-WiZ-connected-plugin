@@ -261,24 +261,16 @@ class BasePlugin:
 
                     if Devices[Device].Color != "":
                         c=json.loads(Devices[Device].Color)
-                        try:
-                            wizcw=received["result"]["c"]
-                            wizww=received["result"]["w"]
-                            wizr=received["result"]["r"]
-                            wizg=received["result"]["g"]
-                            wizb=received["result"]["b"]
-
-                            c=json.loads(Devices[Device].Color)
-                            c["cw"] = wizcw
-                            c["ww"] = wizww
-                            c["r"] = wizr
-                            c["g"] = wizg
-                            c["b"] = wizb
-
-                        except:
-                            wiztemp=received["result"]["temp"] 
+                        if 'c' in received["result"] and 'w' in received["result"]:
+                            c["cw"] = wizcw=received["result"]["c"]
+                            c["ww"] = wizww=received["result"]["w"]
+                        if 'r' in received["result"] and 'g' in received["result"] and 'b' in received["result"]:
+                            c["r"] = received["result"]["r"]
+                            c["g"] = received["result"]["g"]
+                            c["b"] = received["result"]["b"]
+                        if 'temp' in received["result"]:
+                            wiztemp=received["result"]["temp"]
                             c["t"] = (wiztemp - 2700) / 14.9
-
                         wizcolor=json.dumps(c)
                     else:
                        wizcolor=""
